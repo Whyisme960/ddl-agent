@@ -1,32 +1,98 @@
 import streamlit as st
 from datetime import datetime, timedelta
+from supabase import create_client
 import json
-import os
 
-# 页面标题
+# ========== Supabase 配置（只改这里） ==========
+SUPABASE_URL = "https://ajugxvdbknwaoxxkswmo.supabase.co"
+SUPABASE_KEY = "sb_publishable_riUdW2EgE5AQCVMMV1M_yQ_RSpjmHy9"  # ← 替换！去API页面复制可发布密钥
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ========== 页面设置 ==========
 st.set_page_config(page_title="DDL智能管家", page_icon="📚")
 st.title("📚 学习DDL与资料管理智能体")
-st.caption("中兴赛道命题四 | 南京理工大学")
+st.caption("中兴赛道命题四 | 南京理工大学 | 用户隔离版")
 
-# 数据文件
-DATA_FILE = "ddl_data.json"
+# ========== 用户登录（隐私保护核心） ==========
+st.sidebar.header("👤 用户身份")
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+if "current_user" not in st.session_state:
+    st.session_state.current_user = ""
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+current_user = st.sidebar.text_input(
+    "输入你的名字（只能看到自己的任务）",
+    value=st.session_state.current_user,
+    placeholder="例如：张三"
+)
 
-# 加载数据
+if current_user:
+    st.session_state.current_user = current_user
+    st.sidebar.success(f"当前用户：{current_user}")
+else:
+    st.sidebar.warning("⚠️ 请先输入名字才能使用")
+    st.stop()
+
+# ========== 数据库操作（带用户隔离） ==========
+def load_data(user):
+    """读取当前用户的任务"""
+    try:
+        response = supabase.table('tasks')\
+            .select('*')\
+            .eq('用户名', user)\
+            .order('截止时间')\
+            .execute()
+        return response.data
+    except Exception as e:
+        st.error(f"读取失败：{e}")
+        return []
+
+def add_task_db(user, course, task, ddl, submit, note):
+    """添加任务（带用户名）"""
+    try:
+        data = {
+            "用户名": user,
+            "课程": course,
+            "任务": task,
+            "截止时间": ddl,
+            "提交方式": submit or "未填写",
+            "备注": note or "无",
+            "录入时间": datetime.now().strftime("%Y-%m-%d %H:%M")
+        }
+        supabase.table('tasks').insert(data).execute()
+    except Exception as e:
+        st.error(f"保存失败：{e}")
+
+def delete_task_db(user, task_id):
+    """删除任务（只能删自己的）"""
+    try:
+        supabase.table('tasks')\
+            .delete()\
+            .eq('id', task_id)\
+            .eq('用户名', user)\
+            .execute()
+    except Exception as e:
+        st.error(f"删除失败：{e}")
+
+def clear_all_db(user):
+    """清空当前用户的所有任务"""
+    try:
+        supabase.table('tasks')\
+            .delete()\
+            .eq('用户名', user)\
+            .execute()
+    except Exception as e:
+        st.error(f"清空失败：{e}")
+
+# ========== 加载当前用户的数据 ==========
 if "ddl_list" not in st.session_state:
-    st.session_state.ddl_list = load_data()
+    st.session_state.ddl_list = []
+
+st.session_state.ddl_list = load_data(current_user)
 
 # ========== 左侧：添加任务 ==========
 with st.sidebar:
+    st.divider()
     st.header("➕ 添加新任务")
     
     course = st.text_input("课程名称", placeholder="例如：数据结构")
@@ -38,43 +104,52 @@ with st.sidebar:
     
     if st.button("💾 保存", type="primary", use_container_width=True):
         if course and task:
-            new_item = {
-                "id": len(st.session_state.ddl_list),
-                "课程": course,
-                "任务": task,
-                "截止时间": f"{ddl_date} {ddl_time.strftime('%H:%M')}",
-                "提交方式": submit or "未填写",
-                "备注": note or "无",
-                "录入时间": datetime.now().strftime("%Y-%m-%d %H:%M")
-            }
-            st.session_state.ddl_list.append(new_item)
-            save_data(st.session_state.ddl_list)
-            st.success("✅ 添加成功！")
+            ddl_str = f"{ddl_date} {ddl_time.strftime('%H:%M')}"
+            add_task_db(current_user, course, task, ddl_str, submit, note)
+            st.session_state.ddl_list = load_data(current_user)
+            st.success("✅ 已保存到云端！")
             st.rerun()
         else:
             st.error("❌ 课程和任务名称不能为空")
+    
+    # 统计
+    st.divider()
+    st.header("📊 统计")
+    total = len(st.session_state.ddl_list)
+    st.metric("总任务数", total)
+    
+    urgent = 0
+    for item in st.session_state.ddl_list:
+        try:
+            ddl = datetime.strptime(item["截止时间"], "%Y-%m-%d %H:%M")
+            days = (ddl - datetime.now()).days
+            if 0 <= days <= 3:
+                urgent += 1
+        except:
+            pass
+    if urgent > 0:
+        st.error(f"🔥 即将到期：{urgent} 个")
 
-# ========== 中间：展示任务 ==========
-st.header("📋 我的任务清单")
+# ========== 主区域：任务清单 ==========
+st.header(f"📋 {current_user} 的任务清单")
 
 if not st.session_state.ddl_list:
-    st.info("暂无任务，请从左侧添加")
+    st.info("暂无任务，请从左侧添加（数据仅你可见，刷新不丢）")
 else:
-    for idx, item in enumerate(st.session_state.ddl_list):
+    for item in st.session_state.ddl_list:
         with st.container(border=True):
             col1, col2 = st.columns([4, 1])
             
             with col1:
                 st.markdown(f"**📌 {item['课程']} - {item['任务']}**")
-                st.write(f"⏰ 截止时间：{item['截止时间']}")
+                st.write(f"⏰ 截止时间：`{item['截止时间']}`")
                 st.write(f"📤 提交方式：{item['提交方式']}")
                 if item['备注'] != "无":
                     st.write(f"💬 备注：{item['备注']}")
             
             with col2:
-                # 计算剩余天数
                 try:
-                    ddl = datetime.strptime(item['截止时间'], "%Y-%m-%d %H:%M")
+                    ddl = datetime.strptime(item["截止时间"], "%Y-%m-%d %H:%M")
                     days = (ddl - datetime.now()).days
                     if days < 0:
                         st.error("已逾期")
@@ -85,40 +160,41 @@ else:
                 except:
                     st.write("时间未知")
                 
-                if st.button("删除", key=f"del_{idx}"):
-                    st.session_state.ddl_list.pop(idx)
-                    save_data(st.session_state.ddl_list)
+                if st.button("删除", key=f"del_{item['id']}"):
+                    delete_task_db(current_user, item['id'])
+                    st.session_state.ddl_list = load_data(current_user)
                     st.rerun()
 
-# ========== 底部：导出 ==========
+# ========== 导出区域 ==========
 st.divider()
 st.header("💾 导出数据")
 
 if st.session_state.ddl_list:
-    # JSON
-    json_str = json.dumps(st.session_state.ddl_list, ensure_ascii=False, indent=2)
-    st.download_button("📥 导出JSON", data=json_str, file_name="DDL.json", mime="application/json")
+    col1, col2, col3 = st.columns(3)
     
-    # CSV
-    csv = "课程,任务,截止时间,提交方式,备注\n"
-    for item in st.session_state.ddl_list:
-        csv += f"{item['课程']},{item['任务']},{item['截止时间']},{item['提交方式']},{item['备注']}\n"
-    st.download_button("📥 导出CSV", data=csv, file_name="DDL.csv", mime="text/csv")
+    with col1:
+        json_str = json.dumps(st.session_state.ddl_list, ensure_ascii=False, indent=2)
+        st.download_button("📥 导出JSON", data=json_str, file_name="DDL.json", mime="application/json")
     
-    # 日历
-    ical = "BEGIN:VCALENDAR\nVERSION:2.0\n"
-    for item in st.session_state.ddl_list:
-        try:
-            ddl = datetime.strptime(item['截止时间'], "%Y-%m-%d %H:%M")
-            dt = ddl.strftime("%Y%m%dT%H%M%S")
-            ical += f"BEGIN:VEVENT\nDTSTART:{dt}\nSUMMARY:{item['课程']}-{item['任务']}\nEND:VEVENT\n"
-        except:
-            pass
-    ical += "END:VCALENDAR"
-    st.download_button("📅 导出日历(.ics)", data=ical, file_name="DDL.ics", mime="text/calendar")
+    with col2:
+        csv = "课程,任务,截止时间,提交方式,备注\n"
+        for item in st.session_state.ddl_list:
+            csv += f"{item['课程']},{item['任务']},{item['截止时间']},{item['提交方式']},{item['备注']}\n"
+        st.download_button("📥 导出CSV", data=csv, file_name="DDL.csv", mime="text/csv")
     
-    if st.button("🗑️ 清空所有"):
+    with col3:
+        ical = "BEGIN:VCALENDAR\nVERSION:2.0\n"
+        for item in st.session_state.ddl_list:
+            try:
+                ddl = datetime.strptime(item["截止时间"], "%Y-%m-%d %H:%M")
+                dt = ddl.strftime("%Y%m%dT%H%M%S")
+                ical += f"BEGIN:VEVENT\nDTSTART:{dt}\nSUMMARY:{item['课程']}-{item['任务']}\nDESCRIPTION:提交方式：{item['提交方式']}\\n备注：{item['备注']}\nEND:VEVENT\n"
+            except:
+                pass
+        ical += "END:VCALENDAR"
+        st.download_button("📅 导出日历(.ics)", data=ical, file_name="DDL.ics", mime="text/calendar")
+    
+    if st.button("🗑️ 清空我的所有任务"):
+        clear_all_db(current_user)
         st.session_state.ddl_list = []
-        if os.path.exists(DATA_FILE):
-            os.remove(DATA_FILE)
         st.rerun()
