@@ -4,6 +4,8 @@ from supabase import create_client
 import json
 import requests
 import base64
+import re
+import io
 
 # ========== 配置区（只改这里） ==========
 SUPABASE_URL = "https://ajugxvdbknwaoxxkswmo.supabase.co"
@@ -15,7 +17,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ========== 页面设置 ==========
 st.set_page_config(page_title="DDL智能管家", page_icon="📚")
 st.title("📚 学习DDL与资料管理智能体")
-st.caption("中兴赛道命题四 | 南京理工大学 | AI识别版")
+st.caption("中兴赛道命题四 | 南京理工大学 | AI识别+文件提取版")
 
 # ========== 用户登录 ==========
 st.sidebar.header("👤 用户身份")
@@ -83,6 +85,83 @@ def clear_all_db(user):
     except Exception as e:
         st.error(f"清空失败：{e}")
 
+# ========== 智能时间解析（修复版） ==========
+def smart_parse_time(time_str):
+    """
+    智能解析各种中文/英文时间格式
+    返回: datetime 对象
+    """
+    if not time_str or time_str == "未明确":
+        return datetime.now() + timedelta(days=7)
+    
+    # 清理字符串
+    s = time_str.strip().replace("：", ":").replace(" ", "")
+    
+    # 尝试标准格式
+    for fmt in ["%Y-%m-%d%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y/%m/%d%H:%M", "%Y/%m/%d"]:
+        try:
+            return datetime.strptime(s, fmt)
+        except:
+            pass
+    
+    # 提取年月日
+    year = datetime.now().year
+    month = None
+    day = None
+    hour = 23
+    minute = 59
+    
+    # 匹配 2026年9月15日 / 9月15日
+    date_match = re.search(r'(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日', s)
+    if date_match:
+        if date_match.group(1):
+            year = int(date_match.group(1))
+        month = int(date_match.group(2))
+        day = int(date_match.group(3))
+    
+    # 匹配 9-15 / 09-15
+    if not month:
+        date_match2 = re.search(r'(\d{1,2})[-/](\d{1,2})', s)
+        if date_match2:
+            month = int(date_match2.group(1))
+            day = int(date_match2.group(2))
+    
+    # 提取时间
+    # 晚上8点 / 晚8点 / 20点 / 20:00 / 8点30分
+    time_match = re.search(r'(?:晚上|晚)?(\d{1,2})[点:](\d{1,2})?(?:分)?', s)
+    if time_match:
+        hour = int(time_match.group(1))
+        if time_match.group(2):
+            minute = int(time_match.group(2))
+        # 处理"晚上/晚" => 如果是1-6点，加12变成13-18点
+        if '晚上' in s or '晚' in s:
+            if 1 <= hour <= 6:
+                hour += 12
+    
+    # 如果只有日期没有时间，默认23:59
+    if month and day:
+        try:
+            return datetime(year, month, day, hour, minute)
+        except ValueError:
+            pass
+    
+    # 尝试纯数字
+    digits = re.findall(r'\d+', s)
+    if len(digits) >= 3:
+        try:
+            y, m, d = int(digits[0]), int(digits[1]), int(digits[2])
+            if y < 100:
+                y += 2000
+            if len(digits) >= 5:
+                h, mi = int(digits[3]), int(digits[4])
+                return datetime(y, m, d, h, mi)
+            return datetime(y, m, d, 23, 59)
+        except:
+            pass
+    
+    # 都失败，默认一周后
+    return datetime.now() + timedelta(days=7)
+
 # ========== AI提取函数（文字版） ==========
 def extract_with_ai(text):
     if ZHIPU_KEY == "sk-你的智谱APIKey":
@@ -100,7 +179,7 @@ def extract_with_ai(text):
 要求提取：
 - 课程名称
 - 任务名称
-- 截止时间（格式：YYYY-MM-DD HH:MM，如果只有日期，时间默认23:59）
+- 截止时间（尽量提取为 年-月-日 时:分 格式，如 2026-09-15 20:00）
 - 提交方式
 - 备注（命名格式、特殊要求等，没有则填"无"）
 
@@ -147,7 +226,7 @@ def extract_with_image(image_bytes):
     prompt = """这是一张课程通知的截图。请识别图中的文字，并提取以下信息，以JSON格式返回：
 - 课程名称
 - 任务名称
-- 截止时间（格式：YYYY-MM-DD HH:MM，如果只有日期，时间默认23:59）
+- 截止时间（尽量提取为 年-月-日 时:分 格式）
 - 提交方式
 - 备注（命名格式、特殊要求等，没有则填"无"）
 
@@ -170,7 +249,6 @@ def extract_with_image(image_bytes):
         result = response.json()
         content = result["choices"][0]["message"]["content"]
         
-        # 清理markdown格式
         content = content.strip()
         if content.startswith("```json"):
             content = content[7:]
@@ -184,17 +262,39 @@ def extract_with_image(image_bytes):
     except Exception as e:
         return None, str(e)
 
-# ========== 保存AI提取结果的通用函数 ==========
+# ========== 文件文本提取 ==========
+def extract_text_from_file(uploaded_file):
+    """从PDF/Word/TXT文件中提取纯文本"""
+    file_type = uploaded_file.name.lower()
+    
+    try:
+        if file_type.endswith('.pdf'):
+            import PyPDF2
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.getvalue()))
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            return text.strip()
+        
+        elif file_type.endswith('.docx'):
+            import docx
+            doc = docx.Document(io.BytesIO(uploaded_file.getvalue()))
+            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+            return text.strip()
+        
+        elif file_type.endswith('.txt'):
+            return uploaded_file.getvalue().decode('utf-8').strip()
+        
+        else:
+            return None, "不支持的文件格式，请上传 PDF、Word(.docx) 或 TXT 文件"
+    
+    except Exception as e:
+        return None, f"文件读取失败：{str(e)}"
+
+# ========== 保存AI提取结果 ==========
 def save_extracted_data(user, data):
     ddl_str = data.get("截止时间", "")
-    try:
-        ddl_dt = datetime.strptime(ddl_str, "%Y-%m-%d %H:%M")
-    except:
-        try:
-            ddl_dt = datetime.strptime(ddl_str, "%Y-%m-%d")
-            ddl_dt = ddl_dt.replace(hour=23, minute=59)
-        except:
-            ddl_dt = datetime.now() + timedelta(days=7)
+    ddl_dt = smart_parse_time(ddl_str)
     
     add_task_db(
         user,
@@ -271,27 +371,27 @@ else:
 
 st.divider()
 
-# ========== 左侧：添加任务（三种方式） ==========
+# ========== 左侧：添加任务（四种方式） ==========
 with st.sidebar:
     st.header("➕ 添加新任务")
     
     # --- 1. AI截图识别 ---
-    with st.expander("📸 AI截图识别", expanded=True):
-        uploaded_file = st.file_uploader(
+    with st.expander("📸 AI截图识别"):
+        uploaded_img = st.file_uploader(
             "上传课程通知截图",
             type=["png", "jpg", "jpeg"],
-            help="支持微信/QQ截图、手机拍照、网页截图等"
+            key="img_upload"
         )
         
-        if uploaded_file is not None:
-            st.image(uploaded_file, caption="已上传的截图", use_container_width=True)
+        if uploaded_img is not None:
+            st.image(uploaded_img, caption="已上传的截图", use_container_width=True)
             
-            if st.button("🔍 AI识别图片", type="primary", use_container_width=True):
+            if st.button("🔍 AI识别图片", type="primary", use_container_width=True, key="btn_img"):
                 if ZHIPU_KEY == "sk-你的智谱APIKey":
                     st.error("❌ 请先修改代码中的 ZHIPU_KEY！")
                 else:
                     with st.spinner("AI正在看图识字..."):
-                        image_bytes = uploaded_file.getvalue()
+                        image_bytes = uploaded_img.getvalue()
                         data, err = extract_with_image(image_bytes)
                     
                     if err:
@@ -311,7 +411,7 @@ with st.sidebar:
         notice = st.text_area("粘贴课程通知：", height=100,
             placeholder="例如：各位同学，《数据结构》第三章作业请于9月15日晚8点前提交...")
         
-        if st.button("🔍 AI一键提取", use_container_width=True):
+        if st.button("🔍 AI一键提取", use_container_width=True, key="btn_text"):
             if not notice.strip():
                 st.warning("请先粘贴通知内容")
             elif ZHIPU_KEY == "sk-你的智谱APIKey":
@@ -332,7 +432,51 @@ with st.sidebar:
     
     st.divider()
     
-    # --- 3. 手动录入 ---
+    # --- 3. 文件上传提取（新增！） ---
+    with st.expander("📄 上传文件提取（PDF/Word/TXT）", expanded=True):
+        uploaded_doc = st.file_uploader(
+            "上传课程文件",
+            type=["pdf", "docx", "txt"],
+            key="doc_upload",
+            help="支持PDF、Word文档、纯文本文件"
+        )
+        
+        if uploaded_doc is not None:
+            st.write(f"已选择：**{uploaded_doc.name}**")
+            
+            if st.button("📖 读取并AI提取", type="primary", use_container_width=True, key="btn_doc"):
+                if ZHIPU_KEY == "sk-你的智谱APIKey":
+                    st.error("❌ 请先修改代码中的 ZHIPU_KEY！")
+                else:
+                    with st.spinner("正在读取文件内容..."):
+                        result = extract_text_from_file(uploaded_doc)
+                    
+                    if isinstance(result, tuple) and result[0] is None:
+                        st.error(result[1])
+                    else:
+                        text = result
+                        if len(text) > 3000:
+                            text = text[:3000] + "\n...（内容过长，已截取前3000字）"
+                        
+                        with st.expander("查看文件提取的原文"):
+                            st.text(text[:500] + "..." if len(text) > 500 else text)
+                        
+                        with st.spinner("AI正在分析文件内容..."):
+                            data, err = extract_with_ai(text)
+                        
+                        if err:
+                            st.error(f"AI提取失败：{err}")
+                        elif data:
+                            save_extracted_data(current_user, data)
+                            st.session_state.ddl_list = load_data(current_user)
+                            st.success("✅ 文件提取成功并已保存！")
+                            with st.expander("查看识别结果"):
+                                st.json(data)
+                            st.rerun()
+    
+    st.divider()
+    
+    # --- 4. 手动录入 ---
     with st.expander("✏️ 手动录入"):
         course = st.text_input("课程名称", placeholder="例如：数据结构", key="m_course")
         task = st.text_input("任务名称", placeholder="例如：第三章作业", key="m_task")
@@ -341,7 +485,7 @@ with st.sidebar:
         submit = st.text_input("提交方式", placeholder="例如：智慧理工平台", key="m_submit")
         note = st.text_area("备注", placeholder="命名格式等...", key="m_note")
         
-        if st.button("💾 手动保存", use_container_width=True):
+        if st.button("💾 手动保存", use_container_width=True, key="btn_manual"):
             if course and task:
                 ddl_str = f"{ddl_date} {ddl_time.strftime('%H:%M')}"
                 add_task_db(current_user, course, task, ddl_str, submit, note)
@@ -365,7 +509,7 @@ with st.sidebar:
 st.header(f"📋 {current_user} 的任务清单")
 
 if not st.session_state.ddl_list:
-    st.info("暂无任务，请从左侧添加（支持截图识别、文字提取、手动录入三种方式）")
+    st.info("暂无任务，请从左侧添加（支持截图识别、文字提取、文件上传、手动录入四种方式）")
 else:
     for idx, item in enumerate(st.session_state.ddl_list):
         with st.container(border=True):

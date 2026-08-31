@@ -1,3 +1,5 @@
 streamlit
 supabase
 requests
+PyPDF2
+python-docx
