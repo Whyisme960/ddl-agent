@@ -3,18 +3,18 @@ from datetime import datetime, timedelta
 from supabase import create_client
 import json
 
-# ========== Supabase 配置（只改这里） ==========
+# ========== Supabase 配置（已填好） ==========
 SUPABASE_URL = "https://ajugxvdbknwaoxxkswmo.supabase.co"
-SUPABASE_KEY = "sb_publishable_riUdW2EgE5AQCVMMV1M_yQ_RSpjmHy9"  # ← 替换！去API页面复制可发布密钥
+SUPABASE_KEY = "sb_publishable_riUdW2EgE5AQCVMMV1M_yQ_RSpjmHy9"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ========== 页面设置 ==========
 st.set_page_config(page_title="DDL智能管家", page_icon="📚")
 st.title("📚 学习DDL与资料管理智能体")
-st.caption("中兴赛道命题四 | 南京理工大学 | 用户隔离版")
+st.caption("中兴赛道命题四 | 南京理工大学 | 提醒版")
 
-# ========== 用户登录（隐私保护核心） ==========
+# ========== 用户登录 ==========
 st.sidebar.header("👤 用户身份")
 
 if "current_user" not in st.session_state:
@@ -33,9 +33,8 @@ else:
     st.sidebar.warning("⚠️ 请先输入名字才能使用")
     st.stop()
 
-# ========== 数据库操作（带用户隔离） ==========
+# ========== 数据库操作 ==========
 def load_data(user):
-    """读取当前用户的任务"""
     try:
         response = supabase.table('tasks')\
             .select('*')\
@@ -48,7 +47,6 @@ def load_data(user):
         return []
 
 def add_task_db(user, course, task, ddl, submit, note):
-    """添加任务（带用户名）"""
     try:
         data = {
             "用户名": user,
@@ -64,7 +62,6 @@ def add_task_db(user, course, task, ddl, submit, note):
         st.error(f"保存失败：{e}")
 
 def delete_task_db(user, task_id):
-    """删除任务（只能删自己的）"""
     try:
         supabase.table('tasks')\
             .delete()\
@@ -75,7 +72,6 @@ def delete_task_db(user, task_id):
         st.error(f"删除失败：{e}")
 
 def clear_all_db(user):
-    """清空当前用户的所有任务"""
     try:
         supabase.table('tasks')\
             .delete()\
@@ -84,15 +80,74 @@ def clear_all_db(user):
     except Exception as e:
         st.error(f"清空失败：{e}")
 
-# ========== 加载当前用户的数据 ==========
+# ========== 加载数据 ==========
 if "ddl_list" not in st.session_state:
     st.session_state.ddl_list = []
 
 st.session_state.ddl_list = load_data(current_user)
 
+# ========== 🔔 提醒中心 ==========
+st.header("🔔 提醒中心")
+
+now = datetime.now()
+tasks = st.session_state.ddl_list
+
+overdue = []
+today = []
+tomorrow = []
+week = []
+
+for item in tasks:
+    try:
+        ddl = datetime.strptime(item['截止时间'], '%Y-%m-%d %H:%M')
+        delta = (ddl - now).days
+        if delta < 0:
+            overdue.append(item)
+        elif delta == 0:
+            today.append(item)
+        elif delta == 1:
+            tomorrow.append(item)
+        elif 2 <= delta <= 7:
+            week.append(item)
+    except:
+        pass
+
+if overdue or today or tomorrow:
+    cols = st.columns(3)
+    
+    with cols[0]:
+        if overdue:
+            with st.container(border=True):
+                st.error(f"🔴 已逾期 {len(overdue)} 个")
+                for item in overdue:
+                    st.write(f"**{item['课程']}** - {item['任务']}")
+    
+    with cols[1]:
+        if today:
+            with st.container(border=True):
+                st.warning(f"🟠 今天截止 {len(today)} 个")
+                for item in today:
+                    st.write(f"**{item['课程']}** - {item['任务']}")
+    
+    with cols[2]:
+        if tomorrow:
+            with st.container(border=True):
+                st.info(f"🔵 明天截止 {len(tomorrow)} 个")
+                for item in tomorrow:
+                    st.write(f"**{item['课程']}** - {item['任务']}")
+    
+    if week:
+        with st.expander(f"📅 未来7天还有 {len(week)} 个任务"):
+            for item in week:
+                ddl = datetime.strptime(item['截止时间'], '%Y-%m-%d %H:%M')
+                st.write(f"**{item['课程']}** - {item['任务']}（{ddl.strftime('%m月%d日')}）")
+else:
+    st.success("🎉 近期没有紧急任务，可以放松一下！")
+
+st.divider()
+
 # ========== 左侧：添加任务 ==========
 with st.sidebar:
-    st.divider()
     st.header("➕ 添加新任务")
     
     course = st.text_input("课程名称", placeholder="例如：数据结构")
@@ -107,36 +162,27 @@ with st.sidebar:
             ddl_str = f"{ddl_date} {ddl_time.strftime('%H:%M')}"
             add_task_db(current_user, course, task, ddl_str, submit, note)
             st.session_state.ddl_list = load_data(current_user)
-            st.success("✅ 已保存到云端！")
+            st.success("✅ 已保存！")
             st.rerun()
         else:
             st.error("❌ 课程和任务名称不能为空")
     
-    # 统计
     st.divider()
     st.header("📊 统计")
     total = len(st.session_state.ddl_list)
     st.metric("总任务数", total)
     
-    urgent = 0
-    for item in st.session_state.ddl_list:
-        try:
-            ddl = datetime.strptime(item["截止时间"], "%Y-%m-%d %H:%M")
-            days = (ddl - datetime.now()).days
-            if 0 <= days <= 3:
-                urgent += 1
-        except:
-            pass
+    urgent = len(overdue) + len(today) + len(tomorrow)
     if urgent > 0:
-        st.error(f"🔥 即将到期：{urgent} 个")
+        st.error(f"🔥 紧急任务：{urgent} 个")
 
 # ========== 主区域：任务清单 ==========
 st.header(f"📋 {current_user} 的任务清单")
 
 if not st.session_state.ddl_list:
-    st.info("暂无任务，请从左侧添加（数据仅你可见，刷新不丢）")
+    st.info("暂无任务，请从左侧添加")
 else:
-    for item in st.session_state.ddl_list:
+    for idx, item in enumerate(st.session_state.ddl_list):
         with st.container(border=True):
             col1, col2 = st.columns([4, 1])
             
@@ -153,10 +199,14 @@ else:
                     days = (ddl - datetime.now()).days
                     if days < 0:
                         st.error("已逾期")
+                    elif days == 0:
+                        st.warning("今天截止")
+                    elif days == 1:
+                        st.info("明天截止")
                     elif days <= 3:
-                        st.warning(f"剩{days}天")
-                    else:
                         st.success(f"剩{days}天")
+                    else:
+                        st.write(f"剩{days}天")
                 except:
                     st.write("时间未知")
                 
@@ -165,7 +215,7 @@ else:
                     st.session_state.ddl_list = load_data(current_user)
                     st.rerun()
 
-# ========== 导出区域 ==========
+# ========== 导出区域（带日历提醒） ==========
 st.divider()
 st.header("💾 导出数据")
 
@@ -183,16 +233,34 @@ if st.session_state.ddl_list:
         st.download_button("📥 导出CSV", data=csv, file_name="DDL.csv", mime="text/csv")
     
     with col3:
-        ical = "BEGIN:VCALENDAR\nVERSION:2.0\n"
+        ical = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//DDL Agent//CN\n"
         for item in st.session_state.ddl_list:
             try:
-                ddl = datetime.strptime(item["截止时间"], "%Y-%m-%d %H:%M")
+                ddl = datetime.strptime(item['截止时间'], "%Y-%m-%d %H:%M")
                 dt = ddl.strftime("%Y%m%dT%H%M%S")
-                ical += f"BEGIN:VEVENT\nDTSTART:{dt}\nSUMMARY:{item['课程']}-{item['任务']}\nDESCRIPTION:提交方式：{item['提交方式']}\\n备注：{item['备注']}\nEND:VEVENT\n"
+                
+                ical += f"""BEGIN:VEVENT
+DTSTART:{dt}
+DTEND:{dt}
+SUMMARY:⏰ {item['课程']} - {item['任务']}
+DESCRIPTION:提交方式：{item['提交方式']}\\n备注：{item['备注']}
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:任务提醒：{item['课程']} {item['任务']} 即将截止！
+TRIGGER:-P1D
+END:VALARM
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:紧急提醒：{item['课程']} {item['任务']} 还有1小时截止！
+TRIGGER:-PT1H
+END:VALARM
+END:VEVENT
+"""
             except:
                 pass
         ical += "END:VCALENDAR"
-        st.download_button("📅 导出日历(.ics)", data=ical, file_name="DDL.ics", mime="text/calendar")
+        st.download_button("📅 导出日历(.ics)", data=ical, file_name="DDL提醒.ics", mime="text/calendar")
+        st.caption("💡 导入手机/电脑日历后，提前1天和1小时自动提醒")
     
     if st.button("🗑️ 清空我的所有任务"):
         clear_all_db(current_user)
