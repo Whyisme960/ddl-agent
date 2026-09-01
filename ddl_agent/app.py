@@ -57,8 +57,33 @@ def login_user(username, password):
         return False, f"登录失败：{e}"
 
 # ========== 页面设置 ==========
-st.set_page_config(page_title="DDL智能管家", page_icon="📚")
+st.set_page_config(page_title="南理工DDL智能管家", page_icon="📚")
+# ========== 南理工风格顶部 ==========
+top_col1, top_col2 = st.columns([1, 5])
+with top_col1:
+    try:
+        st.image("njust_logo.png", width=85)
+    except:
+        # 如果没放图片，显示文字校徽占位
+        st.markdown("""
+        <div style="width:85px;height:85px;background:linear-gradient(135deg,#4B0082,#8B4513);
+        border-radius:50%;display:flex;align-items:center;justify-content:center;
+        color:white;font-weight:bold;font-size:12px;text-align:center;">
+        南京<br>理工<br>大学
+        </div>
+        """, unsafe_allow_html=True)
 
+with top_col2:
+    st.markdown("""
+    <h1 style="margin-bottom:0;color:#4B0082;">
+        📚 学习DDL与资料管理智能体
+    </h1>
+    <p style="margin-top:4px;color:#666;font-size:14px;">
+        <b>南京理工大学</b> · 计算机科学与工程学院 · 智能体创新实践大赛
+    </p>
+    """, unsafe_allow_html=True)
+
+st.divider()
 # ========== 登录状态初始化 ==========
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
