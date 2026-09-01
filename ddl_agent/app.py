@@ -6,44 +6,138 @@ import requests
 import base64
 import re
 import io
+import hashlib
 
 # ========== 配置区（只改这里） ==========
 SUPABASE_URL = "https://ajugxvdbknwaoxxkswmo.supabase.co"
 SUPABASE_KEY = "sb_publishable_riUdW2EgE5AQCVMMV1M_yQ_RSpjmHy9"
-ZHIPU_KEY = "sk-46024e696b404c35a273f44003583eda.lE37ReQGD9atrxhm" 
+ZHIPU_KEY = "sk-46024e696b404c35a273f44003583eda.lE37ReQGD9atrxhm"  
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# ========== 密码加密 ==========
+def hash_password(password):
+    """SHA256加密（加盐）"""
+    salt = "ddl-agent-2026-njust"
+    return hashlib.sha256((password + salt).encode()).hexdigest()
+
+# ========== 用户认证操作 ==========
+def register_user(username, password):
+    """注册新用户"""
+    try:
+        # 检查用户名是否已存在
+        existing = supabase.table('users').select('id').eq('username', username).execute()
+        if existing.data:
+            return False, "用户名已存在，请直接登录"
+        
+        # 创建用户
+        supabase.table('users').insert({
+            "username": username,
+            "password_hash": hash_password(password),
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M")
+        }).execute()
+        return True, "注册成功！请登录"
+    except Exception as e:
+        return False, f"注册失败：{e}"
+
+def login_user(username, password):
+    """验证登录"""
+    try:
+        response = supabase.table('users')\
+            .select('*')\
+            .eq('username', username)\
+            .eq('password_hash', hash_password(password))\
+            .execute()
+        
+        if response.data:
+            return True, "登录成功"
+        else:
+            return False, "用户名或密码错误"
+    except Exception as e:
+        return False, f"登录失败：{e}"
+
 # ========== 页面设置 ==========
 st.set_page_config(page_title="DDL智能管家", page_icon="📚")
-st.title("📚 学习DDL与资料管理智能体")
-st.caption("中兴赛道命题四 | 南京理工大学 | 搜索检索版")
 
-# ========== 用户登录 ==========
-st.sidebar.header("👤 用户身份")
-
-if "current_user" not in st.session_state:
+# ========== 登录状态初始化 ==========
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
     st.session_state.current_user = ""
 
-current_user = st.sidebar.text_input(
-    "输入你的名字（只能看到自己的任务）",
-    value=st.session_state.current_user,
-    placeholder="例如：张三"
-)
+# ========== 未登录：显示登录/注册界面 ==========
+if not st.session_state.logged_in:
+    st.title("📚 学习DDL与资料管理智能体")
+    st.caption("中兴赛道命题四 | 南京理工大学 | 安全账号版")
+    
+    st.info("🔒 请先登录或注册账号，确保您的数据安全私密")
+    
+    tab1, tab2 = st.tabs(["🔑 登录", "📝 注册"])
+    
+    with tab1:
+        with st.container(border=True):
+            st.subheader("登录账号")
+            login_name = st.text_input("用户名", placeholder="请输入用户名", key="login_name")
+            login_pass = st.text_input("密码", type="password", placeholder="请输入密码", key="login_pass")
+            
+            if st.button("🔓 登录", type="primary", use_container_width=True):
+                if not login_name or not login_pass:
+                    st.error("请输入用户名和密码")
+                else:
+                    success, msg = login_user(login_name, login_pass)
+                    if success:
+                        st.session_state.logged_in = True
+                        st.session_state.current_user = login_name
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+    
+    with tab2:
+        with st.container(border=True):
+            st.subheader("注册新账号")
+            reg_name = st.text_input("用户名", placeholder="设置一个用户名", key="reg_name")
+            reg_pass = st.text_input("密码", type="password", placeholder="设置密码（至少6位）", key="reg_pass")
+            reg_pass2 = st.text_input("确认密码", type="password", placeholder="再次输入密码", key="reg_pass2")
+            
+            if st.button("✅ 注册", type="primary", use_container_width=True):
+                if not reg_name or not reg_pass:
+                    st.error("用户名和密码不能为空")
+                elif len(reg_pass) < 6:
+                    st.error("密码至少6位")
+                elif reg_pass != reg_pass2:
+                    st.error("两次密码不一致")
+                else:
+                    success, msg = register_user(reg_name, reg_pass)
+                    if success:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
+    
+    st.stop()  # 未登录时，后面的功能全部不显示
 
-if current_user:
-    st.session_state.current_user = current_user
-    st.sidebar.success(f"当前用户：{current_user}")
-else:
-    st.sidebar.warning("⚠️ 请先输入名字才能使用")
-    st.stop()
+# ========== 已登录：显示完整功能 ==========
+st.title("📚 学习DDL与资料管理智能体")
+st.caption(f"中兴赛道命题四 | 南京理工大学 | 当前用户：{st.session_state.current_user}")
+
+# 退出登录按钮（放在侧边栏顶部）
+with st.sidebar:
+    if st.button("🚪 退出登录", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.current_user = ""
+        st.session_state.edit_mode = False
+        st.session_state.edit_task = None
+        st.rerun()
+    
+    st.divider()
+
+current_user = st.session_state.current_user
 
 # ========== 编辑状态初始化 ==========
 if "edit_mode" not in st.session_state:
     st.session_state.edit_mode = False
     st.session_state.edit_task = None
 
-# ========== 数据库操作 ==========
+# ========== 数据库操作（任务表） ==========
 def load_data(user):
     try:
         response = supabase.table('tasks')\
@@ -545,7 +639,7 @@ with st.sidebar:
     if urgent > 0:
         st.error(f"🔥 紧急任务：{urgent} 个")
 
-# ========== 🔍 搜索检索（新增！） ==========
+# ========== 🔍 搜索检索 ==========
 st.header("🔍 任务检索")
 
 search_col1, search_col2 = st.columns([4, 1])
@@ -561,7 +655,6 @@ with search_col2:
     if st.button("🔄 显示全部", use_container_width=True):
         search_keyword = ""
 
-# 过滤逻辑
 filtered_tasks = st.session_state.ddl_list
 if search_keyword.strip():
     keyword = search_keyword.strip().lower()
@@ -644,7 +737,7 @@ if st.session_state.ddl_list:
         ical = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//DDL Agent//CN\n"
         for item in st.session_state.ddl_list:
             try:
-                ddl = datetime.strptime(item['截止时间'], "%Y-%m-%d %H:%M")
+                ddl = datetime.strptime(item['截止时间'], '%Y-%m-%d %H:%M')
                 dt = ddl.strftime("%Y%m%dT%H%M%S")
                 
                 ical += f"""BEGIN:VEVENT
