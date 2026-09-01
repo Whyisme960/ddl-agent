@@ -10,14 +10,14 @@ import io
 # ========== 配置区（只改这里） ==========
 SUPABASE_URL = "https://ajugxvdbknwaoxxkswmo.supabase.co"
 SUPABASE_KEY = "sb_publishable_riUdW2EgE5AQCVMMV1M_yQ_RSpjmHy9"
-ZHIPU_KEY = "sk-46024e696b404c35a273f44003583eda.lE37ReQGD9atrxhm"  # ← 替换！
+ZHIPU_KEY = "sk-46024e696b404c35a273f44003583eda.lE37ReQGD9atrxhm" 
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ========== 页面设置 ==========
 st.set_page_config(page_title="DDL智能管家", page_icon="📚")
 st.title("📚 学习DDL与资料管理智能体")
-st.caption("中兴赛道命题四 | 南京理工大学 | 可编辑版")
+st.caption("中兴赛道命题四 | 南京理工大学 | 搜索检索版")
 
 # ========== 用户登录 ==========
 st.sidebar.header("👤 用户身份")
@@ -72,7 +72,6 @@ def add_task_db(user, course, task, ddl, submit, note):
         st.error(f"保存失败：{e}")
 
 def update_task_db(task_id, course, task, ddl, submit, note):
-    """更新任务（新增）"""
     try:
         supabase.table('tasks').update({
             "课程": course,
@@ -375,13 +374,12 @@ st.divider()
 
 # ========== 左侧：添加/编辑任务 ==========
 with st.sidebar:
-    # --- 编辑模式（新增！） ---
+    # --- 编辑模式 ---
     if st.session_state.edit_mode and st.session_state.edit_task:
         st.header("✏️ 编辑任务")
         
         task = st.session_state.edit_task
         
-        # 解析现有时间
         try:
             old_ddl = datetime.strptime(task['截止时间'], '%Y-%m-%d %H:%M')
             old_date = old_ddl.date()
@@ -422,7 +420,6 @@ with st.sidebar:
     # --- 添加新任务 ---
     st.header("➕ 添加新任务")
     
-    # 1. AI截图识别
     with st.expander("📸 AI截图识别"):
         uploaded_img = st.file_uploader(
             "上传课程通知截图",
@@ -453,7 +450,6 @@ with st.sidebar:
     
     st.divider()
     
-    # 2. AI文字提取
     with st.expander("📝 粘贴文字通知"):
         notice = st.text_area("粘贴课程通知：", height=100,
             placeholder="例如：各位同学，《数据结构》第三章作业请于9月15日晚8点前提交...")
@@ -479,7 +475,6 @@ with st.sidebar:
     
     st.divider()
     
-    # 3. 文件上传提取
     with st.expander("📄 上传文件提取（PDF/Word/TXT）"):
         uploaded_doc = st.file_uploader(
             "上传课程文件",
@@ -523,7 +518,6 @@ with st.sidebar:
     
     st.divider()
     
-    # 4. 手动录入
     with st.expander("✏️ 手动录入"):
         course = st.text_input("课程名称", placeholder="例如：数据结构", key="m_course")
         task = st.text_input("任务名称", placeholder="例如：第三章作业", key="m_task")
@@ -542,7 +536,6 @@ with st.sidebar:
             else:
                 st.error("❌ 课程和任务名称不能为空")
     
-    # 统计
     st.divider()
     st.header("📊 统计")
     total = len(st.session_state.ddl_list)
@@ -552,13 +545,47 @@ with st.sidebar:
     if urgent > 0:
         st.error(f"🔥 紧急任务：{urgent} 个")
 
-# ========== 主区域：任务清单（带编辑按钮） ==========
+# ========== 🔍 搜索检索（新增！） ==========
+st.header("🔍 任务检索")
+
+search_col1, search_col2 = st.columns([4, 1])
+
+with search_col1:
+    search_keyword = st.text_input(
+        "输入关键词搜索（课程/任务/提交方式/备注）",
+        placeholder="例如：数据结构、作业、智慧理工...",
+        label_visibility="collapsed"
+    )
+
+with search_col2:
+    if st.button("🔄 显示全部", use_container_width=True):
+        search_keyword = ""
+
+# 过滤逻辑
+filtered_tasks = st.session_state.ddl_list
+if search_keyword.strip():
+    keyword = search_keyword.strip().lower()
+    filtered_tasks = [
+        item for item in st.session_state.ddl_list
+        if (keyword in item['课程'].lower() or
+            keyword in item['任务'].lower() or
+            keyword in item['提交方式'].lower() or
+            keyword in item['备注'].lower())
+    ]
+    st.caption(f"🔎 关键词「{search_keyword}」共找到 **{len(filtered_tasks)}** 个结果")
+
+# ========== 主区域：任务清单 ==========
 st.header(f"📋 {current_user} 的任务清单")
 
-if not st.session_state.ddl_list:
-    st.info("暂无任务，请从左侧添加（支持截图识别、文字提取、文件上传、手动录入四种方式）")
+display_tasks = filtered_tasks if search_keyword.strip() else st.session_state.ddl_list
+
+if not display_tasks:
+    if search_keyword.strip():
+        st.info(f"未找到包含「{search_keyword}」的任务，试试其他关键词")
+    else:
+        st.info("暂无任务，请从左侧添加（支持截图识别、文字提取、文件上传、手动录入四种方式）")
 else:
-    for idx, item in enumerate(st.session_state.ddl_list):
+    for idx, item in enumerate(display_tasks):
         with st.container(border=True):
             col1, col2 = st.columns([4, 1])
             
@@ -586,13 +613,11 @@ else:
                 except:
                     st.write("时间未知")
                 
-                # 编辑按钮（新增！）
                 if st.button("✏️ 编辑", key=f"edit_{item['id']}", use_container_width=True):
                     st.session_state.edit_mode = True
                     st.session_state.edit_task = item
                     st.rerun()
                 
-                # 删除按钮
                 if st.button("🗑️ 删除", key=f"del_{item['id']}", use_container_width=True):
                     delete_task_db(current_user, item['id'])
                     st.session_state.ddl_list = load_data(current_user)
